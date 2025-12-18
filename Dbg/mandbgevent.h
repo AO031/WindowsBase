@@ -14,6 +14,26 @@ typedef struct _PROCESS_EXIT_INFO{
 	size_t WorkingSetSize;
 }PROCESS_EXIT_INFO, *PPROCESS_EXIT_INFO;
 
+typedef struct _BREAKPOINT {
+	LPVOID address;
+	BYTE originalByte;
+	BOOL isEnabled;
+	BOOL isTemped;
+}BREAKPOINT, * PBREAKPOINT;
+
+typedef struct _BP_NODE {
+	BREAKPOINT bp;
+	struct _BP_NODE* next;
+}BP_NODE, * PBP_NODE;
+
+typedef struct _BREAKPOINT_MANAGER {
+	PBP_NODE head;
+	HANDLE hProcess;
+	DWORD count;
+}BREAKPOINT_MANAGER, * PBREAKPOINT_MANAGER;
+
+
+BREAKPOINT_MANAGER g_bpManager = { 0 };
 
 BOOL InitDebugInfo();
 VOID WriteDebugInfo(CONST PWCHAR foramt, ...);

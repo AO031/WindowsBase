@@ -92,12 +92,39 @@ BOOL DbgEventCreateThread(CREATE_THREAD_DEBUG_INFO* info) {
 	printf("[CreateThread]\n");
 	return TRUE;
 }
+/*====================================================================*/
 
-BOOL DbgEventException(EXCEPTION_DEBUG_INFO* info) {
+BOOL SingleStepHandler(PEXCEPTION_RECORD pExceptRecord) {
+	
+	return TRUE;
+}
+
+BOOL BreakPointHandler(PEXCEPTION_RECORD pExceptionRecord) {
+
 
 	return TRUE;
 }
 
+
+BOOL DbgEventException(EXCEPTION_DEBUG_INFO* info) {
+	PEXCEPTION_RECORD pExceptRecord = &info->ExceptionRecord;
+
+	if (pExceptRecord->ExceptionCode == EXCEPTION_SINGLE_STEP) {
+		return SingleStepHandler(pExceptRecord);
+	}
+
+	if (pExceptRecord->ExceptionCode == EXCEPTION_BREAKPOINT) {
+		return BreakPointHandler(pExceptRecord);
+	}
+
+	printf("Exception Code -> %p\n", (PVOID)pExceptRecord->ExceptionCode);
+	return TRUE;
+}
+
+
+
+
+/*====================================================================*/
 VOID GetProcessFullPath(HANDLE hProcess, PWCHAR szBuffer, DWORD dwBufferSize) {
 	DWORD dwSize = dwBufferSize;
 	if (!QueryFullProcessImageName(hProcess, 0, szBuffer, &dwSize)){
