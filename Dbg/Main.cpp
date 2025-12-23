@@ -5,22 +5,10 @@
 #include <vector>
 #include <TlHelp32.h>
 #include <Psapi.h>
+#include "common.h"
 #include "mandbgevent.h"
 
-
-#define DEBUG_STATUS_SUSPENDED 0x00000001
-#define DEBUG_STATUS_ACTIVE    0x00000002
-#define DEBUG_STATUS_NONE 0x00000003
-
 std::vector<std::wstring> Cmd;
-
-DWORD g_status = DEBUG_STATUS_NONE;
-
-HANDLE g_hprocess = NULL;
-HANDLE g_hthread = NULL;
-DWORD g_process = NULL;
-DWORD g_thread = NULL;
-HANDLE g_hLogFile = INVALID_HANDLE_VALUE;
 
 
 void softinfo();
@@ -29,6 +17,9 @@ BOOL DispatchDebugEvent(DEBUG_EVENT* dbg_event);
 BOOL CheckCmdSize(int num);
 void CreateProcessDebug();
 VOID DBGgo();
+VOID DbgSetBreakPoint();
+VOID DbgRemoveBreakPoint();
+VOID DbgListBreakPoint();
 // c D:\code\CTF\re\PeCon\Debug\InstDrv.exe
 
 int main() {
@@ -61,6 +52,9 @@ void softinfo() {
 	std::wcout << L"\t - c Create Process Debug" << std::endl;
 	std::wcout << L"\t - q quit" << std::endl;
 	std::wcout << L"\t - g run" << std::endl;
+	std::wcout << L"\t - bp" << std::endl;
+	std::wcout << L"\t - bc" << std::endl;
+	std::wcout << L"\t - bl" << std::endl;
 	std::wcout << std::endl;
 
 }
@@ -76,6 +70,10 @@ BOOL DispatchTask() {
 		{L"c", CreateProcessDebug},
 		{L"?", softinfo},
 		{L"g", DBGgo},
+		{L"bp",DbgSetBreakPoint},
+		{L"bc",DbgRemoveBreakPoint},
+		{L"bl",DbgListBreakPoint}
+		//{L"show",DbgRemoveBreakPoint}
 	};
 
 	for (size_t i = 0; i < sizeof(cmdlist) / sizeof(cmdlist[0]); i++) {
@@ -131,14 +129,14 @@ VOID CreateProcessDebug() {
 	g_status = DEBUG_STATUS_SUSPENDED;
 	
 
-	g_process = pi.dwProcessId;
-	g_hprocess = pi.hProcess;
-	g_thread = pi.dwThreadId;
-	g_hthread = pi.hThread;
+	g_Process = pi.dwProcessId;
+	g_hProcess = pi.hProcess;
+	g_Thread = pi.dwThreadId;
+	g_hThread = pi.hThread;
 	
 	std::wcout << L"CreateProcess success.\n";
 
-
+	InitBreakPointManager(&g_bpManager, pi.hProcess);
 	/*if (Cmd.size() >= 3 && Cmd[2] == L"p") {
 		DebugActiveProcess(pi.dwProcessId);
 		std::wcout << L"Attach Process success.\n";
@@ -159,7 +157,7 @@ VOID DBGgo()
 	}
 
 	if (g_status == DEBUG_STATUS_SUSPENDED) {
-		ResumeThread(g_hthread);
+		ResumeThread(g_hThread);
 		//g_status = DEBUG_STATUS_ACTIVE;
 		std::wcout << L"Resume Thread success.\n";
 	}
@@ -173,6 +171,68 @@ VOID DBGgo()
 			break;
 		}
 	}
+}
+
+VOID DbgSetBreakPoint() {
+	if (g_status == DEBUG_STATUS_NONE) {
+		printf("Please Create Debug Process\n");
+		return;
+	}
+
+	LPVOID address = NULL;
+	std::wstring addrstr = Cmd[1];
+	address = (LPVOID)std::stoull(addrstr.substr(2), nullptr, 16);
+
+
+	if (SetBreakPoint(&g_bpManager, address, FALSE)) {
+		printf("Set BreakPoint Success\n");
+	}
+	else {
+		printf("Set BreakPoint Failed\n");
+	}
+}
+
+VOID DbgRemoveBreakPoint()
+{
+	if (g_status == DEBUG_STATUS_NONE) {
+		printf("Please Create Debug Process\n");
+		return;
+	}
+
+	LPVOID address = NULL;
+	std::wstring addrstr = Cmd[1];
+	address = (LPVOID)std::stoull(addrstr.substr(2), nullptr, 16);
+
+
+	if (RemoveBreakPoint(&g_bpManager, address)) {
+		printf("Remove BreakPoint Success\n");
+	}
+	else {
+		printf("Remove BreakPoint Failed\n");
+	}
+
+}
+
+VOID DbgListBreakPoint()
+{
+	if (g_status == DEBUG_STATUS_NONE) {
+		printf("Please Create Debug Process\n");
+		return;
+	}
+
+	if (g_bpManager.count == 0) {
+		printf("There is no break point\n");
+		return;
+	}
+
+	printf("\nBreak Point List\n");
+	PBP_NODE cur = g_bpManager.head;
+	while (cur) {
+		printf("address -> %p\n",cur->bp.address);
+		printf("\n");
+		cur = cur->next;
+	}
+	return VOID();
 }
 
 BOOL DispatchDebugEvent(DEBUG_EVENT* dbg_event)

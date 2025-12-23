@@ -1,4 +1,6 @@
 #include "mandbgevent.h"
+#include "common.h"
+
 
 BOOL InitDebugInfo() {
 	WCHAR logpath[MAX_PATH] = { 0 };
@@ -94,17 +96,256 @@ BOOL DbgEventCreateThread(CREATE_THREAD_DEBUG_INFO* info) {
 }
 /*====================================================================*/
 
-BOOL SingleStepHandler(PEXCEPTION_RECORD pExceptRecord) {
+typedef enum _EXCEPT_CMD {
+	CONTINUE,
+	STEP,
+	REGISTER,
+	MEMORY,
+	HELP
+}EXCEPT_CMD;
+
+EXCEPT_CMD GetComand(const std::wstring& cmd) {
+	if (cmd == L"c") return CONTINUE;
+	if (cmd == L"ni") return STEP;
+	if (cmd == L"reg") return REGISTER;
+	if (cmd == L"tel") return MEMORY;
+	if (cmd == L"help") return HELP;
+}
+
+PBP_NODE FindBreakPoint(PBREAKPOINT_MANAGER manager,LPVOID address) {
+	if (!manager) {
+		return NULL;
+	}
+
+	PBP_NODE cur = manager->head;
+
+	while (cur) {
+		if (cur->bp.address == address) {
+			return cur;
+		}
+		cur = cur->next;
+	}
+
+	return NULL;
+}
+
+BOOL SetBreakPoint(PBREAKPOINT_MANAGER manager, LPVOID address, BOOL temp) {
+
+	if (FindBreakPoint(manager,address)) {
+		printf("already exit\n");
+		return FALSE;
+	}
+
+	PBP_NODE newBp = (PBP_NODE)malloc(sizeof(BP_NODE));
+	if (!newBp) {
+		return FALSE;
+	}
+
+	BYTE int3 = 0xCC;
+	BYTE originalByte = 0;
+	SIZE_T byteRead, byteWrite;
+	HANDLE hProcess = manager->hProcess;
+
+	if (!ReadProcessMemory(hProcess, address, &originalByte, sizeof(BYTE), &byteRead)) {
+		printf("ReadProcessMemory Failed\n");
+		return FALSE;
+	}
+
+	if (!WriteProcessMemory(hProcess,address,&int3,sizeof(BYTE),&byteWrite)){
+		printf("WriteProcessMemory Failed\n");
+		return FALSE;
+	}
+
+	newBp->bp.address = address;
+	newBp->bp.isEnabled = TRUE;
+	newBp->bp.isTemped = temp;
+	newBp->bp.originalByte = originalByte;
+
+	if (manager->head) {
+		newBp->next = manager->head;
+		manager->head = newBp;
+	}
+	else {
+		newBp->next = NULL;
+		manager->head = newBp;
+	}
+
+	manager->count++;
+
+	return TRUE;
+}
+
+BOOL InitBreakPointManager(PBREAKPOINT_MANAGER manager, HANDLE hProcess) {
+
+	manager->head = NULL;
+	manager->hProcess = hProcess;
+	manager->count = 0;
+
+	return TRUE;
+}
+
+BOOL RemoveBreakPoint(PBREAKPOINT_MANAGER manager, LPVOID address)
+{
+	if (!manager||!manager->head) {
+		printf("There is no breakpoint\n");
+		return FALSE;
+	}
+
+	PBP_NODE cur = manager->head;
+	PBP_NODE prev = NULL;
 	
+	while (cur) {
+
+		if (cur->bp.address == address) {
+			if (!WriteProcessMemory(
+				manager->hProcess,
+				address,
+				&cur->bp.originalByte,
+				sizeof(BYTE),
+				NULL
+			)) {
+				printf("WriteProcessMemory Failed\n");
+				return FALSE;
+			}
+
+			if (prev) {
+				prev->next = cur->next;
+			}
+			else {
+				manager->head = cur->next;
+			}
+			manager->count--;
+			free(cur);
+			return TRUE;
+		}
+		prev = cur;
+		cur = cur->next;
+	}
+
+	return FALSE;
+}
+
+VOID ShowMemory(HANDLE hProcess, LPVOID address) {
+	BYTE code[80] = { 0 };
+
+	if (ReadProcessMemory(hProcess, address, code, 80, NULL)) {
+		printf("address -> %p\n", address);
+		for (int i = 0; i < 80; i++) {
+			if (i == 0) {
+				printf("0x%02X ", code[i]);
+				continue;
+			}
+			if (i % 8 == 0) printf("\n");
+			printf("0x%02X ", code[i]);
+		}
+		printf("\n");
+	}
+}
+
+VOID ShowStepInfo(HANDLE hProcess, LPVOID address, PBP_NODE pBpNode) {
+	BYTE code[16] = {0};
+	
+	if (ReadProcessMemory(hProcess, address, code, 16, NULL)) {
+		printf("EIP -> %p\n", address);
+		for (int i = 0; i < 16; i++) {
+			if (i == 0 && pBpNode) {
+				printf("0x%02X ", pBpNode->bp.originalByte);
+				continue;
+			}
+			if (i == 8) printf("\n");
+			printf("0x%02X ", code[i]);
+		}
+		printf("\n");
+	}
+}
+
+BOOL SetSingleStep(HANDLE hThread) {
+	CONTEXT ctx = { 0 };
+	ctx.ContextFlags = CONTEXT_ALL;
+
+	if (!GetThreadContext(hThread, &ctx)) {
+		printf("GetThreadContext Failed\n");
+		return FALSE;
+	}
+
+	ctx.EFlags |= 0x100;
+
+	if (!SetThreadContext(hThread, &ctx)) {
+		printf("SetThreadContext Failed\n");
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+VOID HandlerExceptionLoop() {
+	while (g_status == DEBUG_STATUS_SUSPENDED) {
+		std::wstring cmd;
+		std::wcout << "\nDbg> ";
+		std::getline(std::wcin, cmd);
+		std::wstring addrstr;
+		LPVOID address = 0;
+
+		switch (GetComand(cmd)) {
+		case CONTINUE:
+			g_status = DEBUG_STATUS_ACTIVE;
+			std::wcout << "Continue to run" << std::endl;
+			break;
+		case STEP:
+			if (SetSingleStep(g_hThread)) {
+				g_status = DEBUG_STATUS_ACTIVE;
+				std::wcout << "Continue to Single run" << std::endl;
+			}
+			break;
+		case REGISTER:
+			break;
+		case MEMORY:
+			std::wcout << "address: ";
+			std::getline(std::wcin, addrstr);
+			address = (LPVOID)std::stoull(addrstr, nullptr, 16);
+			ShowMemory(g_hProcess, address);
+			break;
+		case HELP:
+			break;
+		}
+
+		if (g_status != DEBUG_STATUS_SUSPENDED) {
+			break;
+		}
+	}
+}
+
+BOOL SingleStepHandler(PEXCEPTION_RECORD pExceptRecord) {
+
+	ShowStepInfo(g_bpManager.hProcess, pExceptRecord->ExceptionAddress, NULL);
+
+	g_status = DEBUG_STATUS_SUSPENDED;
+
+	HandlerExceptionLoop();
+
 	return TRUE;
 }
 
 BOOL BreakPointHandler(PEXCEPTION_RECORD pExceptionRecord) {
+	PBP_NODE pBpNode = FindBreakPoint(&g_bpManager, pExceptionRecord->ExceptionAddress);
+	if (!pBpNode) {
+		printf("It's not our break point\n");
+		return TRUE;
+	}
+
+	ShowStepInfo(g_bpManager.hProcess, pExceptionRecord->ExceptionAddress, pBpNode);
+
+	if (pBpNode->bp.isEnabled) {
+		RemoveBreakPoint(&g_bpManager, pExceptionRecord->ExceptionAddress);
+	}
+
+	g_status = DEBUG_STATUS_SUSPENDED;
+
+	HandlerExceptionLoop();
 
 
 	return TRUE;
 }
-
 
 BOOL DbgEventException(EXCEPTION_DEBUG_INFO* info) {
 	PEXCEPTION_RECORD pExceptRecord = &info->ExceptionRecord;
@@ -118,11 +359,10 @@ BOOL DbgEventException(EXCEPTION_DEBUG_INFO* info) {
 	}
 
 	printf("Exception Code -> %p\n", (PVOID)pExceptRecord->ExceptionCode);
+
+	HandlerExceptionLoop();
 	return TRUE;
 }
-
-
-
 
 /*====================================================================*/
 VOID GetProcessFullPath(HANDLE hProcess, PWCHAR szBuffer, DWORD dwBufferSize) {
